@@ -20,7 +20,7 @@ Product Store Service with UI
 """
 from flask import jsonify, request, abort
 from flask import url_for  # noqa: F401 pylint: disable=unused-import
-from service.models import Product
+from service.models import Product, Category, DataValidationError # Import Category and DataValidationError
 from service.common import status  # HTTP Status Codes
 from . import app
 
@@ -44,7 +44,7 @@ def index():
 
 
 ######################################################################
-#  U T I L I T Y   F U N C T I O N S
+#   U T I L I T Y   F U N C T I O N S
 ######################################################################
 def check_content_type(content_type):
     """Checks that the media type is correct"""
@@ -80,49 +80,138 @@ def create_products():
     data = request.get_json()
     app.logger.info("Processing: %s", data)
     product = Product()
-    product.deserialize(data)
+    try:
+        product.deserialize(data)
+    except DataValidationError as error:
+        app.logger.error("Invalid product data: %s", error)
+        abort(status.HTTP_400_BAD_REQUEST, str(error))
+
     product.create()
     app.logger.info("Product with new id [%s] saved!", product.id)
 
     message = product.serialize()
 
-    #
     # Uncomment this line of code once you implement READ A PRODUCT
-    #
-    # location_url = url_for("get_products", product_id=product.id, _external=True)
-    location_url = "/"  # delete once READ is implemented
+    location_url = url_for("get_products", product_id=product.id, _external=True)
+    # location_url = "/"  # delete once READ is implemented
     return jsonify(message), status.HTTP_201_CREATED, {"Location": location_url}
 
 
 ######################################################################
 # L I S T   A L L   P R O D U C T S
 ######################################################################
+@app.route("/products", methods=["GET"])
+def list_products():
+    """
+    Returns all of the Products
+    This endpoint supports query parameters for filtering by name, category, and availability.
+    """
+    app.logger.info("Request to list Products...")
+    products = []
+    name = request.args.get("name")
+    category = request.args.get("category")
+    available = request.args.get("available")
 
-#
-# PLACE YOUR CODE TO LIST ALL PRODUCTS HERE
-#
+    if name:
+        app.logger.info("Finding by name: %s", name)
+        products = Product.find_by_name(name).all()
+    elif category:
+        app.logger.info("Finding by category: %s", category)
+        try:
+            category_enum = Category[category.upper()] # Convert string to Category Enum
+            products = Product.find_by_category(category_enum).all()
+        except KeyError:
+            app.logger.error("Invalid category: %s", category)
+            abort(status.HTTP_400_BAD_REQUEST, f"Invalid category: {category}")
+    elif available:
+        app.logger.info("Finding by availability: %s", available)
+        # Convert string 'true'/'false' to boolean
+        if available.lower() == 'true':
+            available_bool = True
+        elif available.lower() == 'false':
+            available_bool = False
+        else:
+            app.logger.error("Invalid boolean value for available: %s", available)
+            abort(status.HTTP_400_BAD_REQUEST, "Invalid boolean value for available. Use 'true' or 'false'.")
+        products = Product.find_by_availability(available_bool).all()
+    else:
+        app.logger.info("Returning all products")
+        products = Product.all()
+
+    results = [product.serialize() for product in products]
+    app.logger.info("Returning %d products", len(results))
+    return jsonify(results), status.HTTP_200_OK
+
 
 ######################################################################
 # R E A D   A   P R O D U C T
 ######################################################################
+@app.route("/products/<int:product_id>", methods=["GET"])
+def get_products(product_id):
+    """
+    Retrieve a single Product
 
-#
-# PLACE YOUR CODE HERE TO READ A PRODUCT
-#
+    This endpoint will return a Product based on its id
+    """
+    app.logger.info("Request to Retrieve a product with id [%s]", product_id)
+
+    product = Product.find(product_id)
+    if not product:
+        app.logger.error("Product with id [%s] was not found.", product_id)
+        abort(status.HTTP_404_NOT_FOUND, f"Product with id '{product_id}' was not found.")
+
+    app.logger.info("Returning product: %s", product.name)
+    return product.serialize(), status.HTTP_200_OK
+
 
 ######################################################################
 # U P D A T E   A   P R O D U C T
 ######################################################################
+@app.route("/products/<int:product_id>", methods=["PUT"])
+def update_products(product_id):
+    """
+    Update a Product
 
-#
-# PLACE YOUR CODE TO UPDATE A PRODUCT HERE
-#
+    This endpoint will update a Product based on the body that is posted
+    """
+    app.logger.info("Request to Update product with id [%s]", product_id)
+    check_content_type("application/json")
+
+    product = Product.find(product_id)
+    if not product:
+        app.logger.error("Product with id [%s] was not found for update.", product_id)
+        abort(status.HTTP_404_NOT_FOUND, f"Product with id '{product_id}' was not found.")
+
+    try:
+        product.deserialize(request.get_json())
+    except DataValidationError as error:
+        app.logger.error("Invalid product data for update: %s", error)
+        abort(status.HTTP_400_BAD_REQUEST, str(error))
+
+    # Ensure the ID from the URL is preserved, preventing ID changes from the payload
+    product.id = product_id
+    product.update()
+    app.logger.info("Product with id [%s] updated!", product.id)
+    return product.serialize(), status.HTTP_200_OK
+
 
 ######################################################################
 # D E L E T E   A   P R O D U C T
 ######################################################################
+@app.route("/products/<int:product_id>", methods=["DELETE"])
+def delete_products(product_id):
+    """
+    Delete a Product
 
+    This endpoint will delete a Product based on the id specified in the path
+    """
+    app.logger.info("Request to Delete product with id [%s]", product_id)
 
-#
-# PLACE YOUR CODE TO DELETE A PRODUCT HERE
-#
+    product = Product.find(product_id)
+    if product: # Only delete if found, otherwise treat as idempotent (204 OK)
+        product.delete()
+        app.logger.info("Product with id [%s] deleted!", product_id)
+    
+    # Return 204 regardless of whether the product was found or deleted
+    # This makes the DELETE operation idempotent.
+    return "", status.HTTP_204_NO_CONTENT

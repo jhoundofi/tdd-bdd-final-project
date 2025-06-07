@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 ######################################################################
-
 """
 Product Steps
 
@@ -24,6 +23,7 @@ For information on Waiting until elements are present in the HTML see:
 """
 import requests
 from behave import given
+from compare import expect
 
 # HTTP Return Codes
 HTTP_200_OK = 200
@@ -38,15 +38,24 @@ def step_impl(context):
     #
     rest_endpoint = f"{context.base_url}/products"
     context.resp = requests.get(rest_endpoint)
-    assert(context.resp.status_code == HTTP_200_OK)
+    expect(context.resp.status_code).to_equal(HTTP_200_OK) # Using expect for Behave
     for product in context.resp.json():
         context.resp = requests.delete(f"{rest_endpoint}/{product['id']}")
-        assert(context.resp.status_code == HTTP_204_NO_CONTENT)
+        expect(context.resp.status_code).to_equal(HTTP_204_NO_CONTENT) # Using expect for Behave
 
     #
     # load the database with new products
     #
     for row in context.table:
-        #
-        # ADD YOUR CODE HERE TO CREATE PRODUCTS VIA THE REST API
-        #
+        # Create payload to include product's name, description, price, availability, category.
+        payload = {
+            "name": row['name'],
+            "description": row['description'],
+            "price": float(row['price']),  # Convert price to float for JSON
+            "available": row['available'].lower() in ['true', '1'], # Convert string to boolean (case-insensitive)
+            "category": row['category']
+        }
+        # Send a POST request to the REST endpoint.
+        context.resp = requests.post(rest_endpoint, json=payload)
+        # Assert that the HTTP status code of the response is equal to 201.
+        expect(context.resp.status_code).to_equal(HTTP_201_CREATED)
